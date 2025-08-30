@@ -45,7 +45,7 @@ class MusicAnalyzer:
         except Exception as e:
             print(f"Error analyzing {audio_path}: {e}")
             return None
-    
+
     def _format_note_events(self, note_events: List) -> List[Dict[str, float]]:
         """
         Format note events from Basic-Pitch into standardized dictionaries
@@ -60,6 +60,15 @@ class MusicAnalyzer:
         
         for event in note_events:
             if isinstance(event, tuple):
+                # FIX: Calculate the mean of confidence values if event[4] is a list/array
+                confidence_val = 0.5
+                if len(event) > 4:
+                    # Check if event[4] is iterable (like a list or array) but not a string
+                    if hasattr(event[4], '__iter__') and not isinstance(event[4], str):
+                        confidence_val = np.mean(event[4])
+                    else:
+                        confidence_val = event[4] # It's already a single number
+
                 # Format: (start_time, end_time, pitch, velocity, confidence_data)
                 formatted_events.append({
                     'start_time': float(event[0]),
@@ -67,7 +76,7 @@ class MusicAnalyzer:
                     'duration': float(event[1] - event[0]),
                     'pitch': float(event[2]),
                     'velocity': float(event[3]),
-                    'confidence': float(event[4]) if len(event) > 4 else 0.5
+                    'confidence': float(confidence_val)
                 })
             else:
                 # Already in dict format

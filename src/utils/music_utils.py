@@ -4,7 +4,7 @@ Music Utilities
 Helper functions for music theory, formatting, and data processing.
 """
 
-from typing import Dict, List, Union
+from typing import Dict, List, Union, Any
 
 
 def format_pitch_classes(pitch_classes: Dict[str, int]) -> str:
