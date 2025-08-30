@@ -2,7 +2,7 @@
 Vibify - Music Recommendation System
 Main Application Entry Point
 
-Complete pipeline: Audio Analysis -> Feature Extraction -> LLM Recommendations
+Complete pipeline: Audio Analysis -> Feature Extraction -> LLM Recommendations -> Vector Storage
 """
 
 import argparse
@@ -16,6 +16,7 @@ sys.path.append(str(PROJECT_ROOT))
 from src.core.analyzer import MusicAnalyzer
 from src.core.recommender import MusicRecommendationEngine
 from src.utils.file_utils import validate_audio_file, save_analysis_results, save_recommendations
+from src.utils.weaviate_utils import WeaviateMusicDB, extract_text_from_analysis
 from src.config.settings import Settings
 
 
@@ -29,6 +30,8 @@ Examples:
   python src/main.py --audio data/input/song.mp3
   python src/main.py --audio song.wav --output-dir custom_output/
   python src/main.py --audio song.mp3 --no-api  # Generate prompt only
+  python src/main.py --audio song.mp3 --store-vector  # Store in Weaviate
+  python src/main.py --audio song.mp3 --find-similar  # Find similar songs in DB
         """
     )
     
@@ -49,6 +52,31 @@ Examples:
         "--no-api",
         action="store_true",
         help="Skip API call and generate prompt only"
+    )
+    
+    parser.add_argument(
+        "--store-vector",
+        action="store_true",
+        help="Store analysis results as vectors in Weaviate database"
+    )
+    
+    parser.add_argument(
+        "--find-similar",
+        action="store_true",
+        help="Find similar songs in Weaviate database"
+    )
+    
+    parser.add_argument(
+        "--weaviate-url",
+        type=str,
+        default="http://localhost:8080",
+        help="Weaviate instance URL (default: http://localhost:8080)"
+    )
+    
+    parser.add_argument(
+        "--weaviate-key",
+        type=str,
+        help="Weaviate API key (for Weaviate Cloud)"
     )
     
     parser.add_argument(
@@ -81,6 +109,66 @@ def print_feature_summary(features):
     print(f"   • Pitch range: {features['pitch_range']['min']:.0f}-{features['pitch_range']['max']:.0f} (MIDI)")
     print(f"   • Note density: {features['rhythm']['note_density']:.1f} notes/second")
     print(f"   • Average velocity: {features['dynamics']['avg_velocity']:.0f}/127")
+
+
+def print_text_analysis(features, song_name):
+    """Print the text representation that will be vectorized"""
+    text = extract_text_from_analysis(features, song_name)
+    print("\n📝 Text Analysis for Vectorization:")
+    print("   " + "─" * 66)
+    print(f"   {text}")
+    print("   " + "─" * 66)
+
+
+def handle_vector_operations(args, features, song_name, audio_path):
+    """Handle Weaviate vector storage and similarity search operations"""
+    
+    # Initialize Weaviate connection
+    weaviate_db = WeaviateMusicDB(args.weaviate_url, args.weaviate_key)
+    
+    if not weaviate_db.client:
+        print("\n❌ Could not connect to Weaviate. Vector operations skipped.")
+        return
+    
+    # Store vector if requested
+    if args.store_vector:
+        print("\n🗄️  Step 4: Storing analysis as vector in Weaviate...")
+        
+        stored_uuid = weaviate_db.store_analysis(features, song_name, str(audio_path))
+        if stored_uuid:
+            print(f"   ✅ Analysis stored with UUID: {stored_uuid}")
+        else:
+            print("   ❌ Failed to store analysis")
+    
+    # Find similar songs if requested
+    if args.find_similar:
+        print("\n🔍 Step 5: Finding similar songs in database...")
+        
+        similar_songs = weaviate_db.find_similar_songs(features, song_name, limit=5)
+        
+        if similar_songs:
+            print(f"\n🎯 Found {len(similar_songs)} similar songs:")
+            print("   " + "─" * 66)
+            
+            for i, song in enumerate(similar_songs, 1):
+                distance = song.get('similarity_distance', 0)
+                similarity_pct = (1 - distance) * 100 if distance < 1 else 0
+                
+                print(f"   {i}. {song.get('song_name', 'Unknown')}")
+                print(f"      Similarity: {similarity_pct:.1f}%")
+                print(f"      Tempo: {song.get('tempo', 0):.0f} BPM")
+                print(f"      Notes: {song.get('note_count', 0)}")
+                print(f"      Duration: {song.get('duration', 0):.1f}s")
+                if args.verbose and song.get('analysis_text'):
+                    print(f"      Analysis: {song['analysis_text'][:100]}...")
+                print()
+            
+            print("   " + "─" * 66)
+        else:
+            print("   📭 No similar songs found in database")
+    
+    # Close connection
+    weaviate_db.close()
 
 
 def main():
@@ -133,6 +221,13 @@ def main():
     # Print feature summary
     print_feature_summary(features)
     
+    # Generate song name from file path
+    song_name = Path(audio_path).stem.replace("_", " ").replace("-", " ").title()
+    
+    # Show text analysis that will be vectorized
+    if args.store_vector or args.find_similar or args.verbose:
+        print_text_analysis(features, song_name)
+    
     # Step 2: Save analysis results
     print("\n💾 Step 2: Saving analysis results...")
     
@@ -158,10 +253,9 @@ def main():
         print("   ⚠️  No OpenAI API key found - generating prompt only")
         print("   💡 Set OPENAI_API_KEY environment variable to enable API calls")
     
-    song_name = Path(audio_path).stem.replace("_", " ").replace("-", " ").title()
     recommendations = recommender.get_recommendations(features, song_name)
     
-    # Step 4: Display and save results
+    # Display recommendations
     print("\n" + "🎵" + "="*68 + "🎵")
     print("   MUSIC RECOMMENDATIONS")
     print("🎵" + "="*68 + "🎵")
@@ -172,9 +266,20 @@ def main():
     if save_recommendations(recommendations, str(recommendations_path), str(audio_path)):
         print(f"\n✅ Recommendations saved: {recommendations_path}")
     
+    # Handle vector operations (Step 4 & 5)
+    if args.store_vector or args.find_similar:
+        handle_vector_operations(args, features, song_name, audio_path)
+    
     # Final summary
     print(f"\n🎉 Analysis complete!")
     print(f"   📁 Output directory: {analysis_path.parent}")
+    
+    # Show additional tips
+    if args.store_vector:
+        print(f"\n💡 Next time, use --find-similar to discover similar songs!")
+    elif not args.store_vector and not args.find_similar:
+        print(f"\n💡 Use --store-vector to save this analysis for future similarity searches")
+        print(f"   Use --find-similar to search for similar songs in your database")
     
     if not Settings.validate_api_key() and not args.no_api:
         print(f"\n💡 To enable automatic API recommendations:")

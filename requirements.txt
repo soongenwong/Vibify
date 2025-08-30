@@ -13,3 +13,4 @@ flake8>=5.0.0
 fastapi
 uvicorn
 python-multipart
+weaviate-client
