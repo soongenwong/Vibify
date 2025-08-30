@@ -1,0 +1,1 @@
+This folder includes .json files to inspect what information the tokens capture (e.g. pitch_range, rhythm, dynamics, temporal, tempo_estimate, harmony, pitch classes, interval_distribution, ...)
